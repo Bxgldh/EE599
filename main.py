@@ -61,27 +61,17 @@ def main():
         # === 2️⃣ 加载训练好的 LoRA 模型 ===
         print("→ Loading fine-tuned LoRA model for evaluation...")
 
-        # model = AutoPeftModelForCausalLM.from_pretrained(
-        #     train_args.output_dir,
-        #     torch_dtype=torch.float16,
-        #     device_map="auto"
-        # )
-        # merged_model = model.merge_and_unload()  # ← 合并 LoRA 权重
-
-        # tokenizer = AutoTokenizer.from_pretrained(train_args.output_dir)
-        # tokenizer.pad_token = tokenizer.eos_token
-        # tokenizer.padding_side = "right"
-
         tokenizer = AutoTokenizer.from_pretrained(
             "meta-llama/Llama-2-7b-hf",
-            cache_dir=CACHE_DIR,
-            local_files_only=True,   # 只用本地缓存
+            cache_dir=train_args.output_dir,
+            local_files_only=True,
             use_fast=True,
             trust_remote_code=True,
         )
 
         compute_dtype = getattr(torch, "float16")
         finetuned_model = train_args.output_dir
+        breakpoint()
 
         model = AutoPeftModelForCausalLM.from_pretrained(
             finetuned_model,
