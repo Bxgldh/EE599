@@ -33,4 +33,4 @@ peft_config = LoraConfig(
         task_type="CAUSAL_LM",
 )
 
-__all__ = ["peft_config"]
+__all__ = ["peft_config", "training_arguments"]

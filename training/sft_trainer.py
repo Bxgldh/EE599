@@ -20,10 +20,6 @@ def run_sft(model, tokenizer, train_data, eval_data, training_args, peft_config)
             "append_concat_token": False,
         }
     )
-
-    trainer.train()
-
-    trainer.save_model()
-    tokenizer.save_pretrained(training_args.output_dir)
+    return trainer
 
 
