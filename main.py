@@ -24,13 +24,26 @@ def main():
     parser = argparse.ArgumentParser(description="Run sentiment classification pipeline")
     parser.add_argument("--run_sft", action="store_true", help="Run supervised fine-tuning (LoRA)")
     parser.add_argument("--run_grpo", action="store_true", help="Run GRPO fine-tuning (policy optimization)")
+    parser.add_argument(
+        "--perturb_data",
+        action="store_true",
+        help="Use perturbed training data (from data_perturbation.py)"
+    )
     args = parser.parse_args()
+    # 打印一下当前数据模式，方便在 log 里看
+    if args.perturb_data:
+        print("\n📊 Using **PERTURBED** training data (X_train augmented)\n")
+    else:
+        print("\n📊 Using **ORIGINAL** training data only\n")
 
     # ======== 2️⃣ 加载数据 ========
-    X_train, X_test, X_eval, y_true = load_and_split_data("data/all-data.csv")
+    X_train, X_test, X_eval, y_true = load_and_split_data(
+        "data/all-data.csv",
+        perturb_data=args.perturb_data,
+    )
     train_data = Dataset.from_pandas(X_train)
     eval_data = Dataset.from_pandas(X_eval)
-    # breakpoint()
+
     # ======== 3️⃣ 模式选择 ========
 
     # === (1) SFT 微调 + 预测 + 评估 ===
@@ -94,12 +107,13 @@ def main():
 
     # === (2) GRPO 优化 === 
     elif args.run_grpo:
+        
         print("\n================ GRPO MODE ================\n")
         grpo_trainer = GRPOTrainer(peft_config, training_arguments, CACHE_DIR, LLAMA_MODEL_NAME)
         grpo_trainer.train(X_train)
         print("\n✅ GRPO fine-tuning done.\n")
 
-    # === (3) Baseline 预测 === 完成
+    # === (3) Baseline 预测 ===
     else:
         print("\n================ BASELINE MODE ================\n")
         model, tokenizer = load_llama(LLAMA_MODEL_NAME, CACHE_DIR)
