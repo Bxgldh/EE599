@@ -3,9 +3,16 @@
 # 一键运行 sentiment pipeline (baseline / SFT / GRPO)
 # ==============================================
 
+# 关掉所有 HF 离线模式
+unset HF_HUB_OFFLINE
+unset TRANSFORMERS_OFFLINE
+export HF_HUB_OFFLINE=0
+export TRANSFORMERS_OFFLINE=0
+
 # 默认环境
-export CUDA_VISIBLE_DEVICES=1
+# export CUDA_VISIBLE_DEVICES=1
 export TOKENIZERS_PARALLELISM=false
+
 
 # 日志目录
 LOG_DIR="logs"
