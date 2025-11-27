@@ -217,10 +217,10 @@ def main():
         grpo_run_dir = grpo_root / f"grpo_{LLAMA_MODEL_NAME.split('/')[-1]}_{time_tag}"
         print(f"→ [GRPO] Output dir: {grpo_run_dir}")
 
-        w_gt = 0.5,
-        w_fin = 0.0,
-        w_cons = 0.0,
-        w_sft_kl = 0.5,
+        w_gt = 0.5
+        w_fin = 0.0
+        w_cons = 0.0
+        w_sft_kl = 0.5
 
         # 3️⃣ 调用 GRPO 训练（内部处理 resume / save）
         print("→ [GRPO] Training with perturb_data=True (using clean+perturbed pairs)...")
