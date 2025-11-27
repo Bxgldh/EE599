@@ -234,12 +234,19 @@ def main():
             perturb_data=True,  # 干净 + 扰动 成对数据
             use_finbert=True,
             finbert_model_name="ProsusAI/finbert",
-            w_gt=0.0,
+            w_gt=0.5,
             w_fin=0.0,
             w_cons=0.0,
-            w_sft_kl=0.0,  # 现在先全部 0，排除 reward 影响
+            w_sft_kl=0.5,  # 现在先全部 0，排除 reward 影响
             resume=args.resume,
         )
+
+        print("\n================ GRPO Hyperparameters ================")
+        print(f"  w_gt      = {w_gt}")
+        print(f"  w_fin     = {w_fin}")
+        print(f"  w_cons    = {w_cons}")
+        print(f"  w_sft_kl  = {w_sft_kl}")
+        print("======================================================\n")
 
         print(f"\n✅ GRPO fine-tuning done. Output saved to: {grpo_run_dir}\n")
 
