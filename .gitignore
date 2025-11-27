@@ -7,3 +7,12 @@
 __pycache__/
 *.pyc
 __pycache__/
+/.idea/.gitignore
+/.idea/deployment.xml
+/.idea/EE599.iml
+/environment.yml.bak
+/.idea/modules.xml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/inspectionProfiles/Project_Default.xml
+/.idea/vcs.xml
+/.idea/webServers.xml
