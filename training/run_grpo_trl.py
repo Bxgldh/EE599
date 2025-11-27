@@ -233,7 +233,6 @@ def consistency_reward_base(
         rewards[i] = v
     return rewards
 
-
 def build_finbert_teacher(finbert_model_name, label_order):
     """
     返回一个 teacher_probs_fn: texts -> [B, 3] 概率（顺序与 label_order 对齐）
@@ -520,7 +519,7 @@ def run_grpo_trl(
     # )
     grpo_args = GRPOConfig(
         output_dir=output_dir,
-        learning_rate=2e-6,  # 保留就行，反正梯度≈0
+        learning_rate=5e-6,  # 保留就行，反正梯度≈0
         per_device_train_batch_size=2,  # ↓ 调小，省显存
         gradient_accumulation_steps=2,  # ↓ 不用累积了，反正只是对照实验
         num_generations=4,  # ↓ 每个 prompt 只采样 1 个 completion，就够了

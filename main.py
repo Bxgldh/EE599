@@ -192,6 +192,12 @@ def main():
     # ============================================================
     #   4️⃣ GRPO 训练（训练时必须用 perturb）
     # ============================================================
+    # ============================================================
+    #   4️⃣ GRPO 训练（训练时必须用 perturb）
+    # ============================================================
+    # ============================================================
+    #   4️⃣ GRPO 训练（训练时必须用 perturb）
+    # ============================================================
     if args.run_grpo:
         print("\n================ GRPO MODE ================\n")
         print("🧪 GRPO training will use PERTURBED data (plus clean) for robustness rewards.\n")
@@ -221,33 +227,48 @@ def main():
         print("→ [GRPO] Training with perturb_data=True (using clean+perturbed pairs)...")
         trainer = run_grpo_trl(
             data_path="data/all-data.csv",
-            sft_lora_path=latest_sft_dir,   # 起点 = clean-SFT
+            sft_lora_path=latest_sft_dir,  # 起点 = clean-SFT
             base_model_path=LLAMA_MODEL_NAME,
             cache_dir=CACHE_DIR,
             output_dir=str(grpo_run_dir),
-            perturb_data=True,              # 干净 + 扰动 成对数据
+            perturb_data=True,  # 干净 + 扰动 成对数据
             use_finbert=True,
             finbert_model_name="ProsusAI/finbert",
             w_gt=0.0,
             w_fin=0.0,
             w_cons=0.0,
-            w_sft_kl = 0.0,  # ⭐ 新增：SFT KL 正则的权重
-            resume=args.resume,             # 只在 run_grpo_trl 里控制 resume
+            w_sft_kl=0.0,  # 现在先全部 0，排除 reward 影响
+            resume=args.resume,
         )
 
         print(f"\n✅ GRPO fine-tuning done. Output saved to: {grpo_run_dir}\n")
 
-        # === 4️⃣ 直接用内存中的 GRPO 模型做评估，避免再加载一份 7B ===
-        print("→ [GRPO] Using in-memory GRPO model for evaluation ...")
-        grpo_model = trainer.model
+        # 4️⃣ 训练用完就把 trainer/model 释放掉，防止显存 & 状态影响
+        del trainer
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+        # 5️⃣ 像 SFT eval 一样重新加载 base LLaMA + tokenizer
+        print("→ [GRPO] Reloading base model + tokenizer for eval (aligned with SFT eval)...")
+        base_model, grpo_tokenizer = load_llama(LLAMA_MODEL_NAME, CACHE_DIR)
+        # load_llama 里已经：
+        # - 用 BitsAndBytes 4bit + nf4
+        # - 设置 pad_token / padding_side
+        # - setup_chat_format(model, tokenizer)
+
+        # 6️⃣ 挂载 GRPO LoRA adapter
+        print("→ [GRPO] Attaching GRPO LoRA adapter for eval ...")
+        grpo_model = PeftModel.from_pretrained(
+            base_model,
+            grpo_run_dir,
+            is_trainable=False,
+        )
         grpo_model.eval()
+        print("✅ GRPO eval model loaded.\n")
 
-        grpo_tokenizer = trainer.processing_class  # 这是构造 GRPOTrainer 时用的 tokenizer
-        if grpo_tokenizer.pad_token is None:
-            grpo_tokenizer.pad_token = grpo_tokenizer.eos_token
-        grpo_tokenizer.padding_side = "left"
-
-        # 5️⃣ CLEAN + PERTURBED 评估
+        # 7️⃣ CLEAN + PERTURBED 评估（完全复用 SFT 那套 predict / evaluate）
         print("\n→ [GRPO] Building CLEAN + PERTURBED test sets for robustness eval ...")
         X_test_clean_eval, y_true_clean_eval, X_test_pert_eval, y_true_pert_eval = build_clean_and_perturbed_test(
             "data/all-data.csv"
@@ -284,35 +305,16 @@ def main():
         grpo_run_dir = str(latest_grpo_dir)
         print(f"📂 Using latest GRPO dir: {grpo_run_dir}")
 
-        # 1) 加载 tokenizer（来自 GRPO 输出目录）
-        tokenizer = AutoTokenizer.from_pretrained(
-            grpo_run_dir,
-            cache_dir=CACHE_DIR,
-            local_files_only=True,
-        )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.padding_side = "left"
+        # 1️⃣ 和 SFT / Baseline 完全一样：用 load_llama 重新加载 base + tokenizer
+        print("→ [GRPO-EVAL] Reloading base model + tokenizer (aligned with SFT eval)...")
+        base_model, tokenizer = load_llama(LLAMA_MODEL_NAME, CACHE_DIR)
+        # load_llama 里面已经：
+        #   - 用 BitsAndBytes 4bit + nf4
+        #   - 设置 pad_token / padding_side
+        #   - setup_chat_format(model, tokenizer)
 
-        # 2) 加载 base LLaMA
-        print("→ Loading base model:", LLAMA_MODEL_NAME)
-        compute_dtype = torch.float16
-        base_model = AutoModelForCausalLM.from_pretrained(
-            LLAMA_MODEL_NAME,
-            cache_dir=CACHE_DIR,
-            local_files_only=True,
-            torch_dtype=compute_dtype,
-            device_map="auto",
-        )
-
-        # 3) vocab 对齐
-        if base_model.get_input_embeddings().num_embeddings != len(tokenizer):
-            old = base_model.get_input_embeddings().num_embeddings
-            print(f"⚙️ Resizing embeddings {old} → {len(tokenizer)}")
-            base_model.resize_token_embeddings(len(tokenizer))
-
-        # 4) 加载 GRPO LoRA adapter
-        print("→ Loading GRPO LoRA adapter...")
+        # 2️⃣ 挂载 GRPO LoRA adapter
+        print("→ [GRPO-EVAL] Attaching GRPO LoRA adapter...")
         grpo_model = PeftModel.from_pretrained(
             base_model,
             grpo_run_dir,
@@ -321,7 +323,7 @@ def main():
         grpo_model.eval()
         print("✅ GRPO eval model loaded.\n")
 
-        # 5) CLEAN / PERTURBED 评估
+        # 3️⃣ CLEAN / PERTURBED 评估（复用和 SFT 一样的 pipeline）
         print("→ [GRPO-EVAL] Building CLEAN + PERTURBED test sets ...")
         X_test_clean_eval, y_true_clean_eval, X_test_pert_eval, y_true_pert_eval = build_clean_and_perturbed_test(
             "data/all-data.csv"
