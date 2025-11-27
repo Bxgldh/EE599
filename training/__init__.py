@@ -1,3 +1,3 @@
 from .sft_trainer import run_sft
-from .grpo_trainer import GRPOTrainer
-__all__=["run_sft","GRPOTrainer"]
+from .run_grpo_trl import run_grpo_trl
+__all__=["run_sft","run_grpo_trl"]

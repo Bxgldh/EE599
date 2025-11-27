@@ -4,7 +4,6 @@ from trl import setup_chat_format
 
 
 def load_llama(name,cache_dir):
-
     compute_dtype = getattr(torch, "float16")
     
     bnb_config = BitsAndBytesConfig(
@@ -21,6 +20,7 @@ def load_llama(name,cache_dir):
         quantization_config=bnb_config,
         cache_dir=cache_dir,
         local_files_only=True,   # 强制只用你刚缓存到本地的文件
+        # use_auth_token=True
     )
     
     model.config.use_cache = False
@@ -31,6 +31,7 @@ def load_llama(name,cache_dir):
         trust_remote_code=True,
         cache_dir=cache_dir,
         local_files_only=True,
+        # use_auth_token=True
     )
 
     tokenizer.pad_token = tokenizer.eos_token
