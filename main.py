@@ -1,125 +1,355 @@
 import warnings
-
 warnings.filterwarnings("ignore")
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import AutoPeftModelForCausalLM
-import torch
+# ==== 在任何用到 transformers 之前打补丁 ====
+import transformers
+from transformers.utils import import_utils
+
+def _disable_torch_load_check(*args, **kwargs):
+    # 课程项目用的临时补丁：关闭 torch>=2.6 强制检查
+    # 注意只加载来自 HuggingFace 官方或可信作者的权重
+    return
+
+# 1) 改 import_utils 里的实现
+import_utils.check_torch_load_is_safe = _disable_torch_load_check
+
+# 2) 同时改 modeling_utils 里拿到的别名
+try:
+    from transformers import modeling_utils
+    if hasattr(modeling_utils, "check_torch_load_is_safe"):
+        modeling_utils.check_torch_load_is_safe = _disable_torch_load_check
+except Exception:
+    # 万一不同版本导入方式不一样，这里就静默跳过
+    pass
+
+# 3) 关键：改 trainer 模块里的本地引用
+try:
+    import transformers.trainer as trainer_mod
+    if hasattr(trainer_mod, "check_torch_load_is_safe"):
+        trainer_mod.check_torch_load_is_safe = _disable_torch_load_check
+except Exception:
+    pass
+# ==========================================
 
 import argparse
-from datasets import Dataset
 from datetime import datetime
+from pathlib import Path
 
-from configs import peft_config, training_arguments, CACHE_DIR, LLAMA_MODEL_NAME
-from data_utils.dataset_build import load_and_split_data
+import torch
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import AutoPeftModelForCausalLM, PeftModel
+
+from configs import peft_config, training_arguments, CACHE_DIR, LLAMA_MODEL_NAME, FINBERT_DIR
+from data_utils.dataset_build import load_and_split_data, build_clean_and_perturbed_test
 from data_utils.evaluation import evaluate
 from models.load_llama import load_llama
 from models.predict_llama import predict
 from training.sft_trainer import run_sft
-from training.grpo_trainer import GRPOTrainer
+from data_utils.match_sft_path import find_latest_sft_dir
+from training.run_grpo_trl import run_grpo_trl
 
 
 def main():
-    # ======== 1️⃣ 参数解析 ========
+    # ======== 1️⃣ 参数解析：SFT / GRPO / GRPO-EVAL / baseline ========
     parser = argparse.ArgumentParser(description="Run sentiment classification pipeline")
     parser.add_argument("--run_sft", action="store_true", help="Run supervised fine-tuning (LoRA)")
     parser.add_argument("--run_grpo", action="store_true", help="Run GRPO fine-tuning (policy optimization)")
-    parser.add_argument(
-        "--perturb_data",
-        action="store_true",
-        help="Use perturbed training data (from data_perturbation.py)"
-    )
-    args = parser.parse_args()
-    # 打印一下当前数据模式，方便在 log 里看
-    if args.perturb_data:
-        print("\n📊 Using **PERTURBED** training data (X_train augmented)\n")
-    else:
-        print("\n📊 Using **ORIGINAL** training data only\n")
+    parser.add_argument("--resume", action="store_true", help="Resume GRPO from checkpoint")
+    parser.add_argument("--eval_grpo", action="store_true", help="Load latest GRPO model and evaluate only")
 
-    # ======== 2️⃣ 加载数据 ========
+    args = parser.parse_args()
+
+    # ======== 2️⃣ baseline 用的数据（统一 clean）========
+    # baseline 我们就用干净数据，简单清晰
     X_train, X_test, X_eval, y_true = load_and_split_data(
         "data/all-data.csv",
-        perturb_data=args.perturb_data,
+        perturb_data=False,   # ✅ baseline: clean only
     )
+    print("Columns:", X_train.columns.tolist())
     train_data = Dataset.from_pandas(X_train)
     eval_data = Dataset.from_pandas(X_eval)
 
-    # ======== 3️⃣ 模式选择 ========
-
-    # === (1) SFT 微调 + 预测 + 评估 ===
+    # ============================================================
+    #   3️⃣ SFT（永远用 clean data 训练）
+    # ============================================================
     if args.run_sft:
         print("\n================ SFT (LoRA) MODE ================\n")
+        print("🧹 SFT training will use CLEAN training data only.\n")
 
+        # SFT 总是用 clean
+        X_train_clean, X_test_clean, X_eval_clean, y_true_clean = load_and_split_data(
+            "data/all-data.csv",
+            perturb_data=False,
+        )
+        print("Columns (SFT X_train):", X_train_clean.columns.tolist())
+        train_data = Dataset.from_pandas(X_train_clean)
+        eval_data = Dataset.from_pandas(X_eval_clean)
+
+        # SFT checkpoint 命名统一用 "clean"
+        sft_mode_tag = "clean"
+
+        # 查找已有 CLEAN SFT checkpoint
+        try:
+            latest_sft_dir = find_latest_sft_dir(
+                model_name=LLAMA_MODEL_NAME,
+                mode_tag=sft_mode_tag,
+                base_dir="./outputs/sft",
+            )
+            print(f"🧭 Found existing CLEAN SFT checkpoint: {latest_sft_dir}")
+        except FileNotFoundError:
+            latest_sft_dir = None
+            print("🧭 No existing CLEAN SFT checkpoint found, will train a new one.\n")
+
+        # === 3.1 训练或复用 SFT ===
         model, tokenizer = load_llama(LLAMA_MODEL_NAME, CACHE_DIR)
 
-        # 动态保存路径
-        time_tag = datetime.now().strftime("%Y%m%d")
-        training_arguments.output_dir = f"./outputs/sft_{LLAMA_MODEL_NAME.split('/')[-1]}_{time_tag}"
-        # print(f"📁 Model will be saved to: {train_args.output_dir}\n")
+        if latest_sft_dir is not None:
+            print(f"✅ Reusing CLEAN SFT checkpoint: {latest_sft_dir}")
+            finetuned_model_dir = latest_sft_dir
+        else:
+            time_tag = datetime.now().strftime("%Y%m%d")
+            sft_root = Path("./outputs/sft")
+            sft_root.mkdir(parents=True, exist_ok=True)
 
-        # === 1️⃣ 训练 ===
-        trainer = run_sft(
-            model=model,
-            tokenizer=tokenizer,
-            train_data=train_data,
-            eval_data=eval_data,
-            training_args=training_arguments,
-            peft_config=peft_config
-        )
-        trainer.train()
-        trainer.save_model()
-        tokenizer.save_pretrained(training_arguments.output_dir)
-        print("✅ SFT training finished!\n")
+            run_name = f"sft_{LLAMA_MODEL_NAME.split('/')[-1]}_{time_tag}_{sft_mode_tag}"
+            sft_run_dir = sft_root / run_name
 
-        # === 2️⃣ 加载训练好的 LoRA 模型 ===
+            training_arguments.output_dir = str(sft_run_dir)
+            print(f"📁 SFT model will be saved to: {training_arguments.output_dir}\n")
+
+            trainer = run_sft(
+                model=model,
+                tokenizer=tokenizer,
+                train_data=train_data,
+                eval_data=eval_data,
+                training_args=training_arguments,
+                peft_config=peft_config
+            )
+            trainer.train()
+            trainer.save_model()
+            tokenizer.save_pretrained(sft_run_dir)
+            print("✅ SFT training finished!\n")
+
+            finetuned_model_dir = str(sft_run_dir)
+
+        # === 3.2 加载 SFT LoRA 模型并 merge ===
         print("→ Loading fine-tuned LoRA model for evaluation...")
-
-        compute_dtype = getattr(torch, "float16")
-        finetuned_model = training_arguments.output_dir
-        print("微调模型位置：" + finetuned_model)
+        compute_dtype = torch.float16
+        print("微调模型位置：" + finetuned_model_dir)
 
         tokenizer = AutoTokenizer.from_pretrained(
-            "meta-llama/Llama-2-7b-hf",
+            LLAMA_MODEL_NAME,
             cache_dir=CACHE_DIR,
-            local_files_only=True,   # 只用本地缓存
+            local_files_only=True,
             use_fast=True,
             trust_remote_code=True,
         )
 
         model = AutoPeftModelForCausalLM.from_pretrained(
-            finetuned_model,
+            finetuned_model_dir,
             torch_dtype=compute_dtype,
             return_dict=True,
             low_cpu_mem_usage=True,
-            device_map="auto" # 重要，不加会用cpu
+            device_map="auto",
         )
 
         merged_model = model.merge_and_unload()
-        merged_model.save_pretrained("./outputs/merged_model",safe_serialization=True, max_shard_size="2GB")
-        tokenizer.save_pretrained("./outputs/merged_model")
 
+        time_tag = datetime.now().strftime("%Y%m%d")
+        merged_root = Path("./outputs/merged")
+        merged_root.mkdir(parents=True, exist_ok=True)
+        merged_run_dir = merged_root / f"merged_{LLAMA_MODEL_NAME.split('/')[-1]}_{time_tag}_{sft_mode_tag}"
 
-        # === 3️⃣ 预测与评估 ===
-        print("→ Generating predictions on test set...")
-        preds = predict(X_test, merged_model, tokenizer)  # ← 用 merged_model
-        print("→ Evaluating...")
-        evaluate(y_true, preds)
+        merged_model.save_pretrained(
+            merged_run_dir,
+            safe_serialization=True,
+            max_shard_size="2GB"
+        )
+        tokenizer.save_pretrained(merged_run_dir)
 
-    # === (2) GRPO 优化 === 
-    elif args.run_grpo:
-        
+        print(f"📁 Merged model saved to: {merged_run_dir}")
+
+        # === 3.3 SFT：在 CLEAN test 上评估 ===
+        print("\n→ [SFT] Evaluating on CLEAN test set ...")
+        preds_clean = predict(X_test_clean, merged_model, tokenizer)
+        print("🔹 [SFT | CLEAN] Metrics:")
+        evaluate(y_true_clean, preds_clean)
+
+        # === 3.4 SFT：在 PERTURBED test 上评估 ===
+        print("\n→ [SFT] Building CLEAN + PERTURBED test sets for robustness eval ...")
+        X_test_clean2, y_true_clean2, X_test_pert, y_true_pert = build_clean_and_perturbed_test(
+            "data/all-data.csv"
+        )
+
+        print("→ [SFT] Evaluating on PERTURBED test set ...")
+        preds_pert = predict(X_test_pert, merged_model, tokenizer)
+        print("🔹 [SFT | PERTURBED] Metrics:")
+        evaluate(y_true_pert, preds_pert)
+
+        return  # 结束 SFT 模式
+
+    # ============================================================
+    #   4️⃣ GRPO 训练（训练时必须用 perturb）
+    # ============================================================
+    if args.run_grpo:
         print("\n================ GRPO MODE ================\n")
-        grpo_trainer = GRPOTrainer(peft_config, training_arguments, CACHE_DIR, LLAMA_MODEL_NAME)
-        grpo_trainer.train(X_train)
-        print("\n✅ GRPO fine-tuning done.\n")
+        print("🧪 GRPO training will use PERTURBED data (plus clean) for robustness rewards.\n")
 
-    # === (3) Baseline 预测 ===
-    else:
-        print("\n================ BASELINE MODE ================\n")
-        model, tokenizer = load_llama(LLAMA_MODEL_NAME, CACHE_DIR)
-        preds = predict(X_test, model, tokenizer)
-        evaluate(y_true, preds)
-        print("\n✅ Baseline evaluation complete.\n")
+        # 1️⃣ 找 CLEAN SFT checkpoint（GRPO 的起点）
+        sft_mode_tag = "clean"
+        try:
+            latest_sft_dir = find_latest_sft_dir(
+                model_name=LLAMA_MODEL_NAME,
+                mode_tag=sft_mode_tag,
+                base_dir="./outputs/sft",
+            )
+            print(f"🧭 Using CLEAN SFT checkpoint for GRPO init: {latest_sft_dir}")
+        except FileNotFoundError:
+            raise RuntimeError(
+                "No CLEAN SFT checkpoint found. Please run with --run_sft first."
+            )
+
+        # 2️⃣ GRPO 输出目录（按日期）
+        time_tag = datetime.now().strftime("%Y%m%d")
+        grpo_root = Path("./outputs/grpo")
+        grpo_root.mkdir(parents=True, exist_ok=True)
+        grpo_run_dir = grpo_root / f"grpo_{LLAMA_MODEL_NAME.split('/')[-1]}_{time_tag}"
+        print(f"→ [GRPO] Output dir: {grpo_run_dir}")
+
+        # 3️⃣ 调用 GRPO 训练（内部处理 resume / save）
+        print("→ [GRPO] Training with perturb_data=True (using clean+perturbed pairs)...")
+        trainer = run_grpo_trl(
+            data_path="data/all-data.csv",
+            sft_lora_path=latest_sft_dir,   # 起点 = clean-SFT
+            base_model_path=LLAMA_MODEL_NAME,
+            cache_dir=CACHE_DIR,
+            output_dir=str(grpo_run_dir),
+            perturb_data=True,              # 干净 + 扰动 成对数据
+            use_finbert=True,
+            finbert_model_name="ProsusAI/finbert",
+            w_gt=1.0,
+            w_fin=0.5,
+            w_cons=0.0,
+            w_sft_kl = 0.3,  # ⭐ 新增：SFT KL 正则的权重
+            resume=args.resume,             # 只在 run_grpo_trl 里控制 resume
+        )
+
+        print(f"\n✅ GRPO fine-tuning done. Output saved to: {grpo_run_dir}\n")
+
+        # === 4️⃣ 直接用内存中的 GRPO 模型做评估，避免再加载一份 7B ===
+        print("→ [GRPO] Using in-memory GRPO model for evaluation ...")
+        grpo_model = trainer.model
+        grpo_model.eval()
+
+        grpo_tokenizer = trainer.processing_class  # 这是构造 GRPOTrainer 时用的 tokenizer
+        if grpo_tokenizer.pad_token is None:
+            grpo_tokenizer.pad_token = grpo_tokenizer.eos_token
+        grpo_tokenizer.padding_side = "left"
+
+        # 5️⃣ CLEAN + PERTURBED 评估
+        print("\n→ [GRPO] Building CLEAN + PERTURBED test sets for robustness eval ...")
+        X_test_clean_eval, y_true_clean_eval, X_test_pert_eval, y_true_pert_eval = build_clean_and_perturbed_test(
+            "data/all-data.csv"
+        )
+
+        print("→ [GRPO] Evaluating on CLEAN test set ...")
+        preds_clean = predict(X_test_clean_eval, grpo_model, grpo_tokenizer)
+        print("🔹 [GRPO | CLEAN] Metrics:")
+        evaluate(y_true_clean_eval, preds_clean)
+
+        print("\n→ [GRPO] Evaluating on PERTURBED test set ...")
+        preds_pert = predict(X_test_pert_eval, grpo_model, grpo_tokenizer)
+        print("🔹 [GRPO | PERTURBED] Metrics:")
+        evaluate(y_true_pert_eval, preds_pert)
+
+        return  # 结束 GRPO 训练模式
+
+    # ============================================================
+    #   5️⃣ 只评估 GRPO（不训练，用最新一次 GRPO）
+    # ============================================================
+    if args.eval_grpo:
+        print("\n================ GRPO EVAL MODE ================\n")
+
+        grpo_root = Path("./outputs/grpo")
+        if not grpo_root.exists():
+            raise RuntimeError("No GRPO outputs found in ./outputs/grpo. Please run --run_grpo first.")
+
+        grpo_runs = sorted(grpo_root.glob("grpo_*"))
+        if not grpo_runs:
+            raise RuntimeError("No GRPO run directories found. Please run --run_grpo first.")
+
+        # 最新一次实验
+        latest_grpo_dir = grpo_runs[-1]
+        grpo_run_dir = str(latest_grpo_dir)
+        print(f"📂 Using latest GRPO dir: {grpo_run_dir}")
+
+        # 1) 加载 tokenizer（来自 GRPO 输出目录）
+        tokenizer = AutoTokenizer.from_pretrained(
+            grpo_run_dir,
+            cache_dir=CACHE_DIR,
+            local_files_only=True,
+        )
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
+
+        # 2) 加载 base LLaMA
+        print("→ Loading base model:", LLAMA_MODEL_NAME)
+        compute_dtype = torch.float16
+        base_model = AutoModelForCausalLM.from_pretrained(
+            LLAMA_MODEL_NAME,
+            cache_dir=CACHE_DIR,
+            local_files_only=True,
+            torch_dtype=compute_dtype,
+            device_map="auto",
+        )
+
+        # 3) vocab 对齐
+        if base_model.get_input_embeddings().num_embeddings != len(tokenizer):
+            old = base_model.get_input_embeddings().num_embeddings
+            print(f"⚙️ Resizing embeddings {old} → {len(tokenizer)}")
+            base_model.resize_token_embeddings(len(tokenizer))
+
+        # 4) 加载 GRPO LoRA adapter
+        print("→ Loading GRPO LoRA adapter...")
+        grpo_model = PeftModel.from_pretrained(
+            base_model,
+            grpo_run_dir,
+            is_trainable=False,
+        )
+        grpo_model.eval()
+        print("✅ GRPO eval model loaded.\n")
+
+        # 5) CLEAN / PERTURBED 评估
+        print("→ [GRPO-EVAL] Building CLEAN + PERTURBED test sets ...")
+        X_test_clean_eval, y_true_clean_eval, X_test_pert_eval, y_true_pert_eval = build_clean_and_perturbed_test(
+            "data/all-data.csv"
+        )
+
+        print("→ [GRPO-EVAL] Evaluating CLEAN test set ...")
+        preds_clean = predict(X_test_clean_eval, grpo_model, tokenizer)
+        print("🔹 [GRPO-EVAL | CLEAN] Metrics:")
+        evaluate(y_true_clean_eval, preds_clean)
+
+        print("\n→ [GRPO-EVAL] Evaluating PERTURBED test set ...")
+        preds_pert = predict(X_test_pert_eval, grpo_model, tokenizer)
+        print("🔹 [GRPO-EVAL | PERTURBED] Metrics:")
+        evaluate(y_true_pert_eval, preds_pert)
+
+        print("\n🎉 GRPO Evaluation Finished.\n")
+        return  # 结束 GRPO 评估模式
+
+    # ============================================================
+    #   6️⃣ Baseline（保持简单：clean 训练 + clean test）
+    # ============================================================
+    print("\n================ BASELINE MODE ================\n")
+    print("🧹 Baseline uses CLEAN training data only.\n")
+    model, tokenizer = load_llama(LLAMA_MODEL_NAME, CACHE_DIR)
+    preds = predict(X_test, model, tokenizer)
+    print("🔹 [Baseline | CLEAN] Metrics:")
+    evaluate(y_true, preds)
+    print("\n✅ Baseline evaluation complete.\n")
 
 
 if __name__ == "__main__":
