@@ -233,7 +233,6 @@ def consistency_reward_base(
         rewards[i] = v
     return rewards
 
-
 def build_finbert_teacher(finbert_model_name, label_order):
     """
     返回一个 teacher_probs_fn: texts -> [B, 3] 概率（顺序与 label_order 对齐）
@@ -504,20 +503,36 @@ def run_grpo_trl(
     # 5) GRPO 配置
     grpo_args = GRPOConfig(
         output_dir=output_dir,
-        learning_rate=2e-6,
+        learning_rate=5e-6,
         per_device_train_batch_size=2,
         gradient_accumulation_steps=2,
         num_generations=4,
         max_prompt_length=512,
         max_completion_length=4,
         num_train_epochs=1,
-        logging_steps=20,
+        logging_steps=50,
         fp16=True,
         bf16=False,
         report_to="none",
-        save_steps=200,     # 每 200 step 保存一次 checkpoint
-        save_total_limit=3  # 只保留 3 个 checkpoint
+        save_steps=10000,     # 每 200 step 保存一次 checkpoint
+        save_total_limit=1  # 只保留 3 个 checkpoint
     )
+    # grpo_args = GRPOConfig(
+    #     output_dir=output_dir,
+    #     learning_rate=5e-6,  # 保留就行，反正梯度≈0
+    #     per_device_train_batch_size=2,  # ↓ 调小，省显存
+    #     gradient_accumulation_steps=2,  # ↓ 不用累积了，反正只是对照实验
+    #     num_generations=4,  # ↓ 每个 prompt 只采样 1 个 completion，就够了
+    #     max_prompt_length=256,  # ↓ prompt 截断短一点，加快 forward
+    #     max_completion_length=4,  # 维持一个很小的 completion 长度即可
+    #     num_train_epochs=1,  # 只跑 1 个 epoch
+    #     logging_steps=50,  # 日志不用太频繁
+    #     fp16=True,
+    #     bf16=False,
+    #     report_to="none",
+    #     save_steps=10_000,  # 远大于总 step → 中途基本不会 save
+    #     save_total_limit=1  # 只保留最后一个 checkpoint 就行
+    # )
 
     # 6) 定义最终用到的 reward 组合
 

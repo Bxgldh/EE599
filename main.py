@@ -192,12 +192,6 @@ def main():
     # ============================================================
     #   4️⃣ GRPO 训练（训练时必须用 perturb）
     # ============================================================
-    # ============================================================
-    #   4️⃣ GRPO 训练（训练时必须用 perturb）
-    # ============================================================
-    # ============================================================
-    #   4️⃣ GRPO 训练（训练时必须用 perturb）
-    # ============================================================
     if args.run_grpo:
         print("\n================ GRPO MODE ================\n")
         print("🧪 GRPO training will use PERTURBED data (plus clean) for robustness rewards.\n")
@@ -223,6 +217,11 @@ def main():
         grpo_run_dir = grpo_root / f"grpo_{LLAMA_MODEL_NAME.split('/')[-1]}_{time_tag}"
         print(f"→ [GRPO] Output dir: {grpo_run_dir}")
 
+        w_gt = 0.5,
+        w_fin = 0.0,
+        w_cons = 0.0,
+        w_sft_kl = 0.5,
+
         # 3️⃣ 调用 GRPO 训练（内部处理 resume / save）
         print("→ [GRPO] Training with perturb_data=True (using clean+perturbed pairs)...")
         trainer = run_grpo_trl(
@@ -234,10 +233,10 @@ def main():
             perturb_data=True,  # 干净 + 扰动 成对数据
             use_finbert=True,
             finbert_model_name="ProsusAI/finbert",
-            w_gt=0.5,
-            w_fin=0.0,
-            w_cons=0.0,
-            w_sft_kl=0.5,  # 现在先全部 0，排除 reward 影响
+            w_gt=w_gt,
+            w_fin=w_fin,
+            w_cons=w_cons,
+            w_sft_kl=w_sft_kl,  # 现在先全部 0，排除 reward 影响
             resume=args.resume,
         )
 

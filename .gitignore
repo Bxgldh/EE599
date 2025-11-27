@@ -3,3 +3,7 @@
 /logs/
 /trained_weigths/
 /test.py
+*.pyc
+__pycache__/
+*.pyc
+__pycache__/
