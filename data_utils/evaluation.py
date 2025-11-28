@@ -42,11 +42,29 @@ def compute_flip_rate(preds_clean, preds_pert):
 
 
 def compute_sym_kl(probs_clean, probs_pert, eps: float = 1e-8):
-    p = np.clip(probs_clean, eps, 1.0)
-    q = np.clip(probs_pert,  eps, 1.0)
+    p = np.asarray(probs_clean, dtype=np.float64)
+    q = np.asarray(probs_pert,  dtype=np.float64)
+
+    # 先过滤掉本身就含 NaN/inf 的行
+    mask = np.isfinite(p).all(axis=1) & np.isfinite(q).all(axis=1)
+    if mask.sum() == 0:
+        # 极端情况：全坏，那就直接返回 nan，或者返回 0 并提示
+        print("⚠️ All rows in probs_clean/probs_pert are non-finite, Sym-KL undefined.")
+        return float("nan")
+
+    if mask.sum() < len(p):
+        print(f"⚠️ Dropped {len(p) - mask.sum()} non-finite rows when computing Sym-KL.")
+
+    p = p[mask]
+    q = q[mask]
+
+    # 再 clip 一下，避免 log(0)
+    p = np.clip(p, eps, 1.0)
+    q = np.clip(q, eps, 1.0)
 
     kl_pq = np.sum(p * (np.log(p) - np.log(q)), axis=-1)
     kl_qp = np.sum(q * (np.log(q) - np.log(p)), axis=-1)
-
     sym_kl = kl_pq + kl_qp
+
     return float(sym_kl.mean())
+

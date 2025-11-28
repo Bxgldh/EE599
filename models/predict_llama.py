@@ -109,6 +109,7 @@ def predict(test, model, tokenizer, return_probs: bool = False):
         y_pred.append(label_str)
 
         # ---- (B) 如果需要 probs：单独跑一遍 forward，拿 logits → 概率分布 ----
+        # ---- (B) 如果需要 probs：单独跑一遍 forward，拿 logits → 概率分布 ----
         if return_probs:
             inputs = tokenizer(
                 prompt,
@@ -120,14 +121,16 @@ def predict(test, model, tokenizer, return_probs: bool = False):
             with torch.no_grad():
                 outputs = model(**inputs)
                 # logits: (1, seq_len, vocab_size)
-                # 最后一个位置的 logits 就是“下一个 token”（也就是 label token）的分布
-                logits = outputs.logits[:, -1, :]         # (1, vocab_size)
-                probs_vocab = F.softmax(logits, dim=-1)   # (1, vocab_size)
+                logits = outputs.logits[:, -1, :]  # (1, vocab_size)
+                probs_vocab = F.softmax(logits, dim=-1)  # (1, vocab_size)
 
-                # 取出三个 label token 上的概率
+                # 取出三个 label token 的概率
                 probs_labels = probs_vocab[:, label_token_ids]  # (1, 3)
-                # 再归一化一下，保证和为 1（只在这三个标签之间分布）
-                probs_labels = probs_labels / probs_labels.sum(dim=-1, keepdim=True)
+
+                # ⭐ 加一层安全防护：防止 sum=0 导致除 0
+                denom = probs_labels.sum(dim=-1, keepdim=True)  # (1, 1)
+                denom = torch.clamp(denom, min=1e-12)
+                probs_labels = probs_labels / denom
 
             all_probs.append(probs_labels.squeeze(0).cpu().numpy())
 
