@@ -50,43 +50,42 @@ from data_utils.prompts import generate_test_prompt
 #             y_pred.append("none")
 #     return y_pred
 
+
 def predict(test, model, tokenizer, return_probs: bool = False):
     """
-    参数
-    ----
-    test: pandas.DataFrame，至少包含一列 'text'
-    model: causal LM（已经挂好 LoRA，eval 模式）
+    test: DataFrame，包含 'text' 列
+    model: 已经挂好 LoRA 的 LLaMA 模型
     tokenizer: 对应 tokenizer
-    return_probs: 是否同时返回每个样本在 [positive, negative, neutral] 三类上的概率分布
-
-    返回
-    ----
-    如果 return_probs = False:
-        y_pred: List[str]，每个元素是 {"positive","negative","neutral","none"} 之一
-    如果 return_probs = True:
-        (y_pred, probs):
-            y_pred 同上
-            probs: np.ndarray, shape (N, 3)，列顺序为 [positive, negative, neutral]
+    return_probs:
+        - False: 只返回 y_pred（和你原来完全一致）
+        - True:  返回 (y_pred, probs)，probs.shape = (N, 3)，顺序 [positive, negative, neutral]
     """
 
     device = model.device
 
-    # 约定 label 顺序，后面算 flip-rate / sym-KL 要和这里保持一致
+    # ====== 1. label 词表 & token id（用于算概率） ======
     label_words = ["positive", "negative", "neutral"]
 
-    # 为每个 label 找到对应的 token id
-    # 一般 LLaMA 系列用 " positive" 这种带空格的 token，更容易是单 token
     label_token_ids = []
     for w in label_words:
-        # 注意加一个前导空格，让 tokenizer 倾向于返回单个 token
+        # 和之前一样，用前面加空格的形式，倾向于得到单 token
         tokens = tokenizer.encode(" " + w, add_special_tokens=False)
         if len(tokens) != 1:
-            # 如果不是单 token，就简单取第一个，算是近似
-            # （要更精确可以改成多 token logprob 相加）
+            # 简单取第一个，粗糙但够用；你要更精细可以后续再改成多 token logprob 相加
             label_token_ids.append(tokens[0])
         else:
             label_token_ids.append(tokens[0])
-    label_token_ids = torch.tensor(label_token_ids, device=device)  # shape (3,)
+    label_token_ids = torch.tensor(label_token_ids, device=device)  # (3,)
+
+    # ====== 2. 保留你原来的 pipeline 行为（负责“真正的分类结果”） ======
+    text_gen_pipe = pipeline(
+        task="text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=1,
+        do_sample=False,
+        # device=0  # 如果你是在 GPU 上，可以加这一行；否则让 HF 自己处理
+    )
 
     y_pred = []
     all_probs = [] if return_probs else None
@@ -94,36 +93,46 @@ def predict(test, model, tokenizer, return_probs: bool = False):
     for i in tqdm(range(len(test))):
         prompt = test.iloc[i]["text"]
 
-        # 构造输入
-        inputs = tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            padding=False,
-        ).to(device)
+        # ---- (A) 用 pipeline 生成文本，解析 label（完全保留你原来的逻辑） ----
+        result = text_gen_pipe(prompt)
+        answer = result[0]["generated_text"].split("=")[-1]
 
-        with torch.no_grad():
-            outputs = model(**inputs)
-            # logits: (batch=1, seq_len, vocab_size)
-            logits = outputs.logits[:, -1, :]      # 取最后一个 token 位置的 logits → (1, vocab)
-            probs_vocab = F.softmax(logits, dim=-1)  # (1, vocab)
+        if "positive" in answer:
+            label_str = "positive"
+        elif "negative" in answer:
+            label_str = "negative"
+        elif "neutral" in answer:
+            label_str = "neutral"
+        else:
+            label_str = "none"
 
-            # 取出三个 label token 的概率
-            probs_labels = probs_vocab[:, label_token_ids]  # (1, 3)
-            # 再归一化一下，保证和为 1（以防其余 token 概率也占了一些质量）
-            probs_labels = probs_labels / probs_labels.sum(dim=-1, keepdim=True)  # (1, 3)
+        y_pred.append(label_str)
 
-            # 预测 label
-            pred_idx = probs_labels.argmax(dim=-1).item()  # 0/1/2
-
-        pred_label = label_words[pred_idx]  # "positive"/"negative"/"neutral"
-        y_pred.append(pred_label)
-
+        # ---- (B) 如果需要 probs：单独跑一遍 forward，拿 logits → 概率分布 ----
         if return_probs:
+            inputs = tokenizer(
+                prompt,
+                return_tensors="pt",
+                truncation=True,
+                padding=False,
+            ).to(device)
+
+            with torch.no_grad():
+                outputs = model(**inputs)
+                # logits: (1, seq_len, vocab_size)
+                # 最后一个位置的 logits 就是“下一个 token”（也就是 label token）的分布
+                logits = outputs.logits[:, -1, :]         # (1, vocab_size)
+                probs_vocab = F.softmax(logits, dim=-1)   # (1, vocab_size)
+
+                # 取出三个 label token 上的概率
+                probs_labels = probs_vocab[:, label_token_ids]  # (1, 3)
+                # 再归一化一下，保证和为 1（只在这三个标签之间分布）
+                probs_labels = probs_labels / probs_labels.sum(dim=-1, keepdim=True)
+
             all_probs.append(probs_labels.squeeze(0).cpu().numpy())
 
     if return_probs:
-        probs = np.stack(all_probs, axis=0)  # (N, 3), 列顺序 [positive, negative, neutral]
+        probs = np.stack(all_probs, axis=0)  # (N, 3)
         return y_pred, probs
     else:
         return y_pred

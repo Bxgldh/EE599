@@ -41,7 +41,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import AutoPeftModelForCausalLM, PeftModel
 
 from configs import peft_config, training_arguments, CACHE_DIR, LLAMA_MODEL_NAME, FINBERT_DIR
-from data_utils.dataset_build import load_and_split_data, build_clean_and_perturbed_test
+from data_utils.dataset_build import load_and_split_data, build_clean_and_perturbed_test, build_clean_and_perturbed_pairs
 from data_utils.evaluation import evaluate, compute_flip_rate, compute_sym_kl
 from models.load_llama import load_llama
 from models.predict_llama import predict
@@ -172,8 +172,7 @@ def main():
 
         # === 3.3 SFT：在 CLEAN test 上评估 ===
         print("\n→ [SFT] Evaluating on CLEAN test set ...")
-        # preds_clean = predict(X_test_clean, merged_model, tokenizer)
-        preds_clean, probs_clean = predict(X_test_clean_eval, grpo_model, grpo_tokenizer, return_probs=True)
+        preds_clean = predict(X_test_clean, merged_model, tokenizer)
         print("🔹 [SFT | CLEAN] Metrics:")
         evaluate(y_true_clean, preds_clean)
 
@@ -184,16 +183,34 @@ def main():
         )
 
         print("→ [SFT] Evaluating on PERTURBED test set ...")
-        # preds_pert = predict(X_test_pert, merged_model, tokenizer)
-        preds_pert, probs_pert = predict(X_test_clean_eval, grpo_model, grpo_tokenizer, return_probs=True)
+        preds_pert = predict(X_test_pert, merged_model, tokenizer)
+
         print("🔹 [SFT | PERTURBED] Metrics:")
         evaluate(y_true_pert, preds_pert)
 
-        flip_rate = compute_flip_rate(preds_clean, preds_pert)
-        sym_kl = compute_sym_kl(probs_clean, probs_pert)
+        # 额外：成对鲁棒性指标
+        print("\n→ [SFT] Building CLEAN + PERTURBED *PAIRED* test set for robustness metrics ...")
+        X_clean_pairs, X_pert_pairs, y_true_pairs = build_clean_and_perturbed_pairs("data/all-data.csv")
 
-        print(f"🔸 Flip Rate (clean vs perturbed): {flip_rate:.4f}")
-        print(f"🔸 Symmetric KL (clean vs perturbed): {sym_kl:.4f}")
+        print("→ [SFT] Predicting on CLEAN/PERTURBED pairs for Flip-Rate & Sym-KL ...")
+        preds_clean_pairs, probs_clean_pairs = predict(
+            X_clean_pairs,
+            merged_model,
+            tokenizer,
+            return_probs=True,
+        )
+        preds_pert_pairs, probs_pert_pairs = predict(
+            X_pert_pairs,
+            merged_model,
+            tokenizer,
+            return_probs=True,
+        )
+
+        flip_rate = compute_flip_rate(preds_clean_pairs, preds_pert_pairs)
+        sym_kl = compute_sym_kl(probs_clean_pairs, probs_pert_pairs)
+
+        print(f"\n🔸 Flip Rate (clean vs perturbed pairs): {flip_rate:.4f}")
+        print(f"🔸 Symmetric KL (clean vs perturbed pairs): {sym_kl:.4f}\n")
 
         return  # 结束 SFT 模式
 
@@ -290,20 +307,38 @@ def main():
         )
 
         print("→ [GRPO-EVAL] Evaluating CLEAN test set ...")
-        preds_clean, probs_clean = predict(X_test_clean_eval, grpo_model, grpo_tokenizer, return_probs=True)
+        preds_clean = predict(X_test_clean_eval, grpo_model, grpo_tokenizer)
         print("🔹 [GRPO-EVAL | CLEAN] Metrics:")
         evaluate(y_true_clean_eval, preds_clean)
 
         print("\n→ [GRPO-EVAL] Evaluating PERTURBED test set ...")
-        preds_pert, probs_pert = predict(X_test_pert_eval, grpo_model, grpo_tokenizer, return_probs=True)
+        preds_pert = predict(X_test_pert_eval, grpo_model, grpo_tokenizer)
         print("🔹 [GRPO-EVAL | PERTURBED] Metrics:")
         evaluate(y_true_pert_eval, preds_pert)
 
-        flip_rate = compute_flip_rate(preds_clean, preds_pert)
-        sym_kl = compute_sym_kl(probs_clean, probs_pert)
+        # 额外：成对鲁棒性指标
+        print("\n→ [GRPO] Building CLEAN + PERTURBED *PAIRED* test set for robustness metrics ...")
+        X_clean_pairs, X_pert_pairs, y_true_pairs = build_clean_and_perturbed_pairs("data/all-data.csv")
 
-        print(f"🔸 Flip Rate (clean vs perturbed): {flip_rate:.4f}")
-        print(f"🔸 Symmetric KL (clean vs perturbed): {sym_kl:.4f}")
+        print("→ [GRPO] Predicting on CLEAN/PERTURBED pairs for Flip-Rate & Sym-KL ...")
+        preds_clean_pairs, probs_clean_pairs = predict(
+            X_clean_pairs,
+            grpo_model,
+            grpo_tokenizer,
+            return_probs=True,
+        )
+        preds_pert_pairs, probs_pert_pairs = predict(
+            X_pert_pairs,
+            grpo_model,
+            grpo_tokenizer,
+            return_probs=True,
+        )
+
+        flip_rate = compute_flip_rate(preds_clean_pairs, preds_pert_pairs)
+        sym_kl = compute_sym_kl(probs_clean_pairs, probs_pert_pairs)
+
+        print(f"\n🔸 Flip Rate (clean vs perturbed pairs): {flip_rate:.4f}")
+        print(f"🔸 Symmetric KL (clean vs perturbed pairs): {sym_kl:.4f}\n")
 
         return  # 结束 GRPO 训练模式
 
@@ -351,20 +386,38 @@ def main():
         )
 
         print("→ [GRPO-EVAL] Evaluating CLEAN test set ...")
-        preds_clean, probs_clean = predict(X_test_clean_eval, grpo_model, tokenizer, return_probs=True)
+        preds_clean = predict(X_test_clean_eval, grpo_model, tokenizer)
         print("🔹 [GRPO-EVAL | CLEAN] Metrics:")
         evaluate(y_true_clean_eval, preds_clean)
 
         print("\n→ [GRPO-EVAL] Evaluating PERTURBED test set ...")
-        preds_pert, probs_pert = predict(X_test_pert_eval, grpo_model, tokenizer, return_probs=True)
+        preds_pert = predict(X_test_pert_eval, grpo_model, tokenizer)
         print("🔹 [GRPO-EVAL | PERTURBED] Metrics:")
         evaluate(y_true_pert_eval, preds_pert)
 
-        flip_rate = compute_flip_rate(preds_clean, preds_pert)
-        sym_kl = compute_sym_kl(probs_clean, probs_pert)
+        # 额外：成对鲁棒性指标
+        print("\n→ [GRPO] Building CLEAN + PERTURBED *PAIRED* test set for robustness metrics ...")
+        X_clean_pairs, X_pert_pairs, y_true_pairs = build_clean_and_perturbed_pairs("data/all-data.csv")
 
-        print(f"🔸 Flip Rate (clean vs perturbed): {flip_rate:.4f}")
-        print(f"🔸 Symmetric KL (clean vs perturbed): {sym_kl:.4f}")
+        print("→ [GRPO] Predicting on CLEAN/PERTURBED pairs for Flip-Rate & Sym-KL ...")
+        preds_clean_pairs, probs_clean_pairs = predict(
+            X_clean_pairs,
+            grpo_model,
+            tokenizer,
+            return_probs=True,
+        )
+        preds_pert_pairs, probs_pert_pairs = predict(
+            X_pert_pairs,
+            grpo_model,
+            tokenizer,
+            return_probs=True,
+        )
+
+        flip_rate = compute_flip_rate(preds_clean_pairs, preds_pert_pairs)
+        sym_kl = compute_sym_kl(probs_clean_pairs, probs_pert_pairs)
+
+        print(f"\n🔸 Flip Rate (clean vs perturbed pairs): {flip_rate:.4f}")
+        print(f"🔸 Symmetric KL (clean vs perturbed pairs): {sym_kl:.4f}\n")
 
         print("\n🎉 GRPO Evaluation Finished.\n")
         return  # 结束 GRPO 评估模式
