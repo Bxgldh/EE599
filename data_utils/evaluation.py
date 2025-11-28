@@ -34,3 +34,19 @@ def evaluate(y_true, y_pred):
     conf_matrix = confusion_matrix(y_true=y_true, y_pred=y_pred, labels=[0, 1, 2])
     print('\nConfusion Matrix:')
     print(conf_matrix)
+
+def compute_flip_rate(preds_clean, preds_pert):
+    preds_clean = np.asarray(preds_clean)
+    preds_pert  = np.asarray(preds_pert)
+    return float((preds_clean != preds_pert).mean())
+
+
+def compute_sym_kl(probs_clean, probs_pert, eps: float = 1e-8):
+    p = np.clip(probs_clean, eps, 1.0)
+    q = np.clip(probs_pert,  eps, 1.0)
+
+    kl_pq = np.sum(p * (np.log(p) - np.log(q)), axis=-1)
+    kl_qp = np.sum(q * (np.log(q) - np.log(p)), axis=-1)
+
+    sym_kl = kl_pq + kl_qp
+    return float(sym_kl.mean())
