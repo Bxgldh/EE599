@@ -408,87 +408,87 @@ def adversarial_tag(
 # 6. 组合三个扰动生成候选 + 构建扰动库
 # ======================
 
-# def gen_perturb_sample(text: str) -> List[Dict[str, Any]]:
-#     """
-#     对单条文本生成多个扰动候选：
-#     - 同义词替换
-#     - 模板释义改写
-#     - 数字 + 实体扰动
-
-#     返回列表，每个元素形如：
-#     {
-#         "orig": 原句,
-#         "pert": 扰动句,
-#         "passed": True/False,   # 是否通过 pass_filter
-#         "sim": 相似度,
-#         ... 如果通过，还包含 FinBERT 对抗标签 ...
-#     }
-#     """
-#     candidates = [
-#         synonym_replace_nltk(text),   # NLTK 近义词替换
-#         back_translate(text),         # 回译扰动
-#         perturb_numbers_entities(text),
-#     ]
-#     outs: List[Dict[str, Any]] = []
-
-#     for t in candidates:
-#         ok, info = pass_filter(text, t)
-#         base = {"orig": text, "pert": t, "passed": ok, **info}
-#         if not ok:
-#             outs.append(base)
-#             continue
-#         # 通过过滤，再补充 FinBERT 对抗性标签
-#         tag = adversarial_tag(text, t)
-#         base.update(tag)
-#         outs.append(base)
-
-#     return outs
-
 def gen_perturb_sample(text: str) -> List[Dict[str, Any]]:
     """
-    修改版：增加了去重逻辑，防止原句被算作扰动样本
-    """
-    candidates = []
-    
-    # 1. 尝试同义词
-    cand1 = synonym_replace_nltk(text)
-    if cand1 != text: candidates.append(cand1)
-    
-    # 2. 尝试回译 (注意：如果没有联网或API失败，back_translate 会返回原句)
-    cand2 = back_translate(text)
-    if cand2 != text: candidates.append(cand2)
-    
-    # 3. 尝试数字/实体替换
-    cand3 = perturb_numbers_entities(text)
-    if cand3 != text: candidates.append(cand3)
-    
-    # 4. (建议) 恢复模板改写
-    # cand4 = template_paraphrase_v1(text)
-    # if cand4 != text: candidates.append(cand4)
+    对单条文本生成多个扰动候选：
+    - 同义词替换
+    - 模板释义改写
+    - 数字 + 实体扰动
 
+    返回列表，每个元素形如：
+    {
+        "orig": 原句,
+        "pert": 扰动句,
+        "passed": True/False,   # 是否通过 pass_filter
+        "sim": 相似度,
+        ... 如果通过，还包含 FinBERT 对抗标签 ...
+    }
+    """
+    candidates = [
+        synonym_replace_nltk(text),   # NLTK 近义词替换
+        back_translate(text),         # 回译扰动
+        perturb_numbers_entities(text),
+    ]
     outs: List[Dict[str, Any]] = []
 
     for t in candidates:
-        # 这里 t 肯定不等于 text，但为了双重保险以及计算相似度，继续走流程
         ok, info = pass_filter(text, t)
-        
-        # 再次强制检查：如果相似度极高（例如 > 0.999），通常意味着只有标点符号差异
-        # 根据需求决定是否保留。这里演示保留严格不等的。
-        if t.strip() == text.strip():
-            continue
-
         base = {"orig": text, "pert": t, "passed": ok, **info}
-        
         if not ok:
             outs.append(base)
             continue
-            
-        # 通过过滤，计算 FinBERT 指标
+        # 通过过滤，再补充 FinBERT 对抗性标签
         tag = adversarial_tag(text, t)
         base.update(tag)
         outs.append(base)
 
     return outs
+
+# def gen_perturb_sample(text: str) -> List[Dict[str, Any]]:
+#     """
+#     修改版：增加了去重逻辑，防止原句被算作扰动样本
+#     """
+#     candidates = []
+    
+#     # 1. 尝试同义词
+#     cand1 = synonym_replace_nltk(text)
+#     if cand1 != text: candidates.append(cand1)
+    
+#     # 2. 尝试回译 (注意：如果没有联网或API失败，back_translate 会返回原句)
+#     cand2 = back_translate(text)
+#     if cand2 != text: candidates.append(cand2)
+    
+#     # 3. 尝试数字/实体替换
+#     cand3 = perturb_numbers_entities(text)
+#     if cand3 != text: candidates.append(cand3)
+    
+#     # 4. (建议) 恢复模板改写
+#     # cand4 = template_paraphrase_v1(text)
+#     # if cand4 != text: candidates.append(cand4)
+
+#     outs: List[Dict[str, Any]] = []
+
+#     for t in candidates:
+#         # 这里 t 肯定不等于 text，但为了双重保险以及计算相似度，继续走流程
+#         ok, info = pass_filter(text, t)
+        
+#         # 再次强制检查：如果相似度极高（例如 > 0.999），通常意味着只有标点符号差异
+#         # 根据需求决定是否保留。这里演示保留严格不等的。
+#         if t.strip() == text.strip():
+#             continue
+
+#         base = {"orig": text, "pert": t, "passed": ok, **info}
+        
+#         if not ok:
+#             outs.append(base)
+#             continue
+            
+#         # 通过过滤，计算 FinBERT 指标
+#         tag = adversarial_tag(text, t)
+#         base.update(tag)
+#         outs.append(base)
+
+#     return outs
 
 
 def build_library(headlines: List[str]) -> List[Dict[str, Any]]:
