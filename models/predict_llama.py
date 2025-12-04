@@ -72,7 +72,7 @@ def predict(test, model, tokenizer, return_probs: bool = False):
         tokens = tokenizer.encode(" " + w, add_special_tokens=False)
         if len(tokens) != 1:
             # 简单取第一个，粗糙但够用；你要更精细可以后续再改成多 token logprob 相加
-            label_token_ids.append(tokens[0])
+            label_token_ids.append(tokens[-1])
         else:
             label_token_ids.append(tokens[0])
     label_token_ids = torch.tensor(label_token_ids, device=device)  # (3,)
@@ -109,7 +109,6 @@ def predict(test, model, tokenizer, return_probs: bool = False):
         y_pred.append(label_str)
 
         # ---- (B) 如果需要 probs：单独跑一遍 forward，拿 logits → 概率分布 ----
-        # ---- (B) 如果需要 probs：单独跑一遍 forward，拿 logits → 概率分布 ----
         if return_probs:
             inputs = tokenizer(
                 prompt,
@@ -119,14 +118,25 @@ def predict(test, model, tokenizer, return_probs: bool = False):
             ).to(device)
 
             with torch.no_grad():
-                outputs = model(**inputs)
-                # logits: (1, seq_len, vocab_size)
-                logits = outputs.logits[:, -1, :]  # (1, vocab_size)
-                probs_vocab = F.softmax(logits, dim=-1)  # (1, vocab_size)
+                # outputs = model(**inputs)
+                # # logits: (1, seq_len, vocab_size)
 
-                # 取出三个 label token 的概率
-                probs_labels = probs_vocab[:, label_token_ids]  # (1, 3)
+                # logits = outputs.logits[:, -1, :]  # (1, vocab_size)
+                # probs_vocab = F.softmax(logits, dim=-1)  # (1, vocab_size)
 
+                # # 取出三个 label token 的概率
+                # probs_labels = probs_vocab[:, label_token_ids]  # (1, 3)
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=3,  # 生成完整 label token
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=True
+                )
+                last_token_logits = outputs.scores[-1]  # shape (1, vocab_size)
+                probs_vocab = F.softmax(last_token_logits, dim=-1)
+                probs_labels = probs_vocab[:, label_token_ids]  # (1,3)
+                # breakpoint()
                 # ⭐ 加一层安全防护：防止 sum=0 导致除 0
                 denom = probs_labels.sum(dim=-1, keepdim=True)  # (1, 1)
                 denom = torch.clamp(denom, min=1e-12)

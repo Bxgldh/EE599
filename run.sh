@@ -2,7 +2,7 @@
 # ==============================================
 # 一键运行 sentiment pipeline (baseline / SFT / GRPO)
 # ==============================================
-
+export CUDA_VISIBLE_DEVICES=4
 # 关掉所有 HF 离线模式
 unset HF_HUB_OFFLINE
 unset TRANSFORMERS_OFFLINE

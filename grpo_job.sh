@@ -108,7 +108,7 @@ PY
         if echo "${TRAIN_STATUS}" | grep -q "finished"; then
             echo "✅ Latest GRPO run already finished (global_step >= max_steps)."
             echo "📊 Running evaluation only: python main.py --eval_grpo"
-            python main.py --eval_grpo
+            python main.py --eval_grpo # Evaluate the finished model
             echo "========== GRPO job finished at $(date) =========="
             exit 0
         fi

@@ -239,6 +239,7 @@ def build_clean_and_perturbed_pairs(data_path: str):
     # 4️⃣ 构造 clean / perturbed 的 DataFrame：["text","sentiment"]
     clean_pairs_raw = pairs[["text", "sentiment"]].copy()
     pert_pairs_raw  = pairs[["pert", "sentiment"]].rename(columns={"pert": "text"}).copy()
+    breakpoint()
 
     # 5️⃣ 同样做 prompt 化，保持和你原 eval 完全一致的 prompt 格式
     X_clean_prompt_pairs = pd.DataFrame(
@@ -250,5 +251,6 @@ def build_clean_and_perturbed_pairs(data_path: str):
         columns=["text"]
     )
     y_true_pairs = clean_pairs_raw["sentiment"].tolist()
+    
 
     return X_clean_prompt_pairs, X_pert_prompt_pairs, y_true_pairs

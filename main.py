@@ -88,7 +88,7 @@ def main():
 
         # SFT checkpoint 命名统一用 "clean"
         sft_mode_tag = "clean"
-
+        # breakpoint()
         # 查找已有 CLEAN SFT checkpoint
         try:
             latest_sft_dir = find_latest_sft_dir(
@@ -103,7 +103,7 @@ def main():
 
         # === 3.1 训练或复用 SFT ===
         model, tokenizer = load_llama(LLAMA_MODEL_NAME, CACHE_DIR)
-
+        # breakpoint()
         if latest_sft_dir is not None:
             print(f"✅ Reusing CLEAN SFT checkpoint: {latest_sft_dir}")
             finetuned_model_dir = latest_sft_dir
@@ -126,8 +126,8 @@ def main():
                 training_args=training_arguments,
                 peft_config=peft_config
             )
-            trainer.train()
-            trainer.save_model()
+            # trainer.train()
+            # trainer.save_model()
             tokenizer.save_pretrained(sft_run_dir)
             print("✅ SFT training finished!\n")
 
@@ -218,6 +218,11 @@ def main():
     #   4️⃣ GRPO 训练（训练时必须用 perturb）
     # ============================================================
     if args.run_grpo:
+        X_clean_pairs, X_pert_pairs, y_true_pairs = build_clean_and_perturbed_pairs("data/all-data.csv")
+        # X_test_clean_eval, y_true_clean_eval, X_test_pert_eval, y_true_pert_eval = build_clean_and_perturbed_test(
+        #     "data/all-data.csv"
+        # )
+        # breakpoint()
         print("\n================ GRPO MODE ================\n")
         print("🧪 GRPO training will use PERTURBED data (plus clean) for robustness rewards.\n")
 
@@ -243,9 +248,9 @@ def main():
         print(f"→ [GRPO] Output dir: {grpo_run_dir}")
 
         w_gt = 0.0
-        w_fin = 0.2
-        w_cons = 0.3
-        w_sft_kl = 0.0
+        w_fin = 0.3
+        w_cons = 0.3 # 0.3
+        w_sft_kl = 0.2
 
 
         # 3️⃣ 调用 GRPO 训练（内部处理 resume / save）
@@ -305,7 +310,7 @@ def main():
         X_test_clean_eval, y_true_clean_eval, X_test_pert_eval, y_true_pert_eval = build_clean_and_perturbed_test(
             "data/all-data.csv"
         )
-
+        breakpoint()
         print("→ [GRPO-EVAL] Evaluating CLEAN test set ...")
         preds_clean = predict(X_test_clean_eval, grpo_model, grpo_tokenizer)
         print("🔹 [GRPO-EVAL | CLEAN] Metrics:")

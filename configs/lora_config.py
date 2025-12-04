@@ -9,6 +9,7 @@ training_arguments = SFTConfig(
 
     num_train_epochs=3,                   # 训练 epoch 数
     per_device_train_batch_size=1,        # 每个 GPU 的 batch size
+    per_device_eval_batch_size=1,         # eval 时的 batch size
     gradient_accumulation_steps=8,        # 累积多少步再反向传播一次
     gradient_checkpointing=True,          # 开启梯度检查点以省显存
 

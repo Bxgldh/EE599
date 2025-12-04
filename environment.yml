@@ -1,4 +1,4 @@
-name: ftl
+name: EE599
 channels:
   - conda-forge
   - defaults
